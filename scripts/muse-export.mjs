@@ -53,6 +53,22 @@ async function revealAll(page) {
   });
 }
 
+async function revealFrame(frame) {
+  await frame.evaluate(async () => {
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    const boxes = [document.scrollingElement, ...document.querySelectorAll('*')].filter(
+      (el) => el && el.scrollHeight > el.clientHeight + 50,
+    );
+    for (const el of boxes.slice(0, 20)) {
+      for (let y = 0; y < el.scrollHeight; y += Math.max(el.clientHeight * 0.8, 200)) {
+        el.scrollTop = y;
+        await sleep(120);
+      }
+      el.scrollTop = 0;
+    }
+  });
+}
+
 async function exportOne(browser, url) {
   const dir = path.join(outRoot, slugFor(url));
   await mkdir(path.join(dir, 'images'), { recursive: true });
@@ -62,7 +78,8 @@ async function exportOne(browser, url) {
   await page.waitForTimeout(3000);
   await revealAll(page);
 
-  const data = await page.evaluate(() => {
+  // Muse renders the shared board inside an iframe, so read every frame, not just the shell.
+  const extract = () => {
     const seen = new Set();
     const lines = [];
     const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
@@ -84,8 +101,23 @@ async function exportOne(browser, url) {
       href: a.href,
       text: a.innerText.trim(),
     }));
-    return { title: document.title, lines, images, links };
-  });
+    return { title: document.title, lines, images, links, height: document.documentElement.scrollHeight };
+  };
+  const data = { title: await page.title(), lines: [], images: [], links: [], frames: [] };
+  const seenLines = new Set();
+  for (const [i, frame] of page.frames().entries()) {
+    try {
+      await revealFrame(frame);
+      const part = await frame.evaluate(extract);
+      data.frames.push({ index: i, url: frame.url(), lines: part.lines.length, height: part.height });
+      for (const l of part.lines) if (!seenLines.has(l)) { seenLines.add(l); data.lines.push(l); }
+      data.images.push(...part.images);
+      data.links.push(...part.links);
+      await writeFile(path.join(dir, `frame-${i}.html`), await frame.content(), 'utf8');
+    } catch {
+      /* cross-origin or detached frame: skip */
+    }
+  }
 
   const saved = [];
   for (const [i, img] of data.images.entries()) {
@@ -102,6 +134,9 @@ async function exportOne(browser, url) {
     }
   }
 
+  const tallest = Math.min(Math.max(1000, ...data.frames.map((f) => f.height || 0)) + 200, 30000);
+  await page.setViewportSize({ width: 1600, height: tallest });
+  await page.waitForTimeout(1500);
   await page.screenshot({ path: path.join(dir, 'page.png'), fullPage: true });
   await page.emulateMedia({ media: 'screen' });
   await page.pdf({ path: path.join(dir, 'page.pdf'), printBackground: true, width: '1600px', height: '1000px' })
@@ -113,6 +148,8 @@ async function exportOne(browser, url) {
     `- 取得元: ${url}`,
     `- 取得日時: ${new Date().toISOString()}`,
     `- HTTP: ${response ? response.status() : 'n/a'}`,
+    '',
+    `- フレーム: ${data.frames.map((f) => `#${f.index} ${f.lines}行/高さ${f.height}`).join(', ')}`,
     '',
     '## テキスト',
     '',
