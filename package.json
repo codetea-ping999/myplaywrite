@@ -1,0 +1,14 @@
+{
+  "name": "myplaywrite",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Playwright scripts for reading shared pages (e.g. Muse spaces) and exporting them as md / png / pdf",
+  "scripts": {
+    "muse": "node scripts/muse-export.mjs",
+    "test": "node scripts/selftest.mjs"
+  },
+  "dependencies": {
+    "playwright": "^1.47.0"
+  }
+}
